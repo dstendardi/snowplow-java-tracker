@@ -27,15 +27,14 @@ import java.util.Map;
 
 public class Emitter {
 
-    private final Logger LOGGER = LoggerFactory.getLogger(Emitter.class);
+    private static final Logger LOGGER = LoggerFactory.getLogger(Emitter.class);
+
     private RequestMethod requestMethod = RequestMethod.Synchronous;
     private List<Map<String,Object>> buffer = new ArrayList<Map<String,Object>>();
     private HttpClientAdapter httpClientAdapter;
     protected Integer bufferSize = 10;
     protected RequestCallback requestCallback;
     protected HttpMethod httpMethod = HttpMethod.GET;
-
-
 
     /**
      * Create an Emitter instance with a collector URL and HttpMethod to send requests.
@@ -106,6 +105,7 @@ public class Emitter {
                         unsentPayloads.add(payload);
                     }
                 } catch (Exception e) {
+                    LOGGER.error("Failed to emit payload, <method={}>", httpMethod, e);
                     unsentPayloads.add(payload);
                 }
             }
@@ -124,6 +124,7 @@ public class Emitter {
                     unsentPayloads.add(selfDescribedJson.getMap());
                 }
             } catch (Exception e) {
+                LOGGER.error("Failed to emit payload, <method={}>", httpMethod,  e);
                 unsentPayloads.addAll(toSendPayloads);
             }
         }
