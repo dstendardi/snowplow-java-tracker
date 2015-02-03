@@ -13,6 +13,8 @@
 
 package com.snowplowanalytics.snowplow.tracker.emitter;
 
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.collect.Lists;
 import com.snowplowanalytics.snowplow.tracker.Constants;
 import com.snowplowanalytics.snowplow.tracker.http.HttpClientAdapter;
 import com.snowplowanalytics.snowplow.tracker.payload.SchemaPayload;
@@ -20,7 +22,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 
@@ -72,7 +73,7 @@ public class Emitter {
      */
     public boolean addToBuffer(Map<String, Object> payload) {
         boolean ret = buffer.add(payload);
-        if (buffer.size() == bufferSize) {
+        if (buffer.size() >= bufferSize) {
             flushBuffer();
         }
         return ret;
@@ -87,45 +88,57 @@ public class Emitter {
             return;
         }
 
+        final List<Map<String, Object>> toSendPayloads = Lists.newArrayList(buffer);
+        buffer.clear();
+
+        final List<Map<String, Object>> unsentPayloads = Lists.newArrayList();
+        final List<Map<String, Object>> sentPayloads = Lists.newArrayList();
+
+        // TODO emerge a dedicated object in order to do the send
         if (httpMethod == HttpMethod.GET) {
-            int success_count = 0;
-            List<Map<String, Object>> unsentPayloads = new LinkedList<Map<String, Object>>();
-            for (Map<String, Object> payload : buffer) {
-                int status_code = httpClientAdapter.get(payload);
-                if (status_code == 200) {
-                    success_count++;
-                } else {
+            for (Map<String, Object> payload : toSendPayloads) {
+                try {
+                    final int status_code = httpClientAdapter.get(payload);
+
+                    if (status_code == 200) {
+                        sentPayloads.add(payload);
+                    } else {
+                        unsentPayloads.add(payload);
+                    }
+                } catch (Exception e) {
                     unsentPayloads.add(payload);
                 }
             }
-            if (unsentPayloads.size() == 0) {
-                if (requestCallback != null) {
-                    requestCallback.onSuccess(success_count);
-                }
-            }
-            else if (requestCallback != null) {
-                requestCallback.onFailure(success_count, unsentPayloads);
-            }
+
         } else if (httpMethod == HttpMethod.POST) {
-            List<Map<String, Object>> unsentPayload = new LinkedList<Map<String, Object>>();
+            try {
+                final SchemaPayload selfDescribedJson = new SchemaPayload();
+                selfDescribedJson.setSchema(Constants.SCHEMA_PAYLOAD_DATA);
+                selfDescribedJson.setData(toSendPayloads);
 
-            SchemaPayload selfDescribedJson = new SchemaPayload();
-            selfDescribedJson.setSchema(Constants.SCHEMA_PAYLOAD_DATA);
+                final int status_code = httpClientAdapter.post(selfDescribedJson);
 
-            List<Map<String, Object>> eventMaps = new ArrayList<Map<String, Object>>();
-            for (Map<String, Object> payload : buffer) {
-                eventMaps.add(payload);
-            }
-            selfDescribedJson.setData(eventMaps);
-            int status_code = httpClientAdapter.post(selfDescribedJson);
-            if (status_code == 200 && requestCallback != null) {
-                requestCallback.onSuccess(buffer.size());
-            } else if (requestCallback != null) {
-                unsentPayload.add(selfDescribedJson.getMap());
-                requestCallback.onFailure(0, unsentPayload);
+                if (status_code == 200) {
+                    sentPayloads.addAll(toSendPayloads);
+                } else {
+                    unsentPayloads.add(selfDescribedJson.getMap());
+                }
+            } catch (Exception e) {
+                unsentPayloads.addAll(toSendPayloads);
             }
         }
-        
-        buffer.clear();
+
+        if (requestCallback != null) {
+            if (unsentPayloads.size() == 0) {
+                requestCallback.onSuccess(sentPayloads.size());
+            } else {
+                requestCallback.onFailure(sentPayloads.size(), unsentPayloads);
+            }
+        }
+    }
+
+    @VisibleForTesting
+    protected List<Map<String, Object>> getBuffer() {
+        return buffer;
     }
 }
